@@ -1,8 +1,33 @@
+# Javascript / Typescript
 *.js
 !jest.config.js
 *.d.ts
 node_modules
+package-lock.json
 
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+cdk.context.json
+
+# IntelliJ
+.idea
+*.iml
+
+# Visual Studio Code
+.vscode
+
+# Mac
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Yarn
+yarn-error.log
+
+# Local development
+.env
+
+# Build
+build

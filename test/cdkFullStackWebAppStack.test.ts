@@ -3,7 +3,7 @@
 // import * as S3CloudFrontR53AcmIamCdk from '../lib/s3_cloud_front_r53_acm_iam_cdk-stack';
 
 // example test. To run these tests, uncomment this file along with the
-// example resource in lib/s3_cloud_front_r53_acm_iam_cdk-stack.ts
+// example resource in lib/cdkFullStackWebAppStack.ts
 test('SQS Queue Created', () => {
 //   const app = new cdk.App();
 //     // WHEN

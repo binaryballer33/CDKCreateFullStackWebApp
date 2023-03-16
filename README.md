@@ -1,14 +1,6 @@
-# Welcome to your CDK TypeScript project
+# This is a CDK application that creates all the infrastructure needed to run a website. 
 
-This is a blank project for CDK development with TypeScript.
-
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
-
-## Useful commands
-
-* `npm run build`   compile typescript to js
-* `npm run watch`   watch for changes and compile
-* `npm run test`    perform the jest unit tests
-* `cdk deploy`      deploy this stack to your default AWS account/region
-* `cdk diff`        compare deployed stack with current state
-* `cdk synth`       emits the synthesized CloudFormation template
+### You can choose the type of website that you want to create by calling the appropriate method in the constructor
+- `this.initializeS3StaticWebsite()` - Creates a static website using S3, doesn't have HTTPS, Bucket is public
+- `this.initializeCloudFrontWebsite()` - Creates a website using S3 and CloudFront, has HTTPS, Bucket is private
+- `this.initializeCloudFrontWebsiteWithCustomDomainName()` - Creates a website using S3 and CloudFront, has HTTPS, Bucket is private, and uses a custom domain name
