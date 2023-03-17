@@ -28,6 +28,3 @@ yarn-error.log
 
 # Local development
 .env
-
-# Build
-build
