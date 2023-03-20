@@ -1,7 +1,7 @@
 import {App, Stack, StackProps} from '@aws-cdk/core';
 import {Bucket, BucketEncryption} from '@aws-cdk/aws-s3';
 import {BucketDeployment, Source} from '@aws-cdk/aws-s3-deployment';
-import {Certificate, CertificateValidation, DnsValidatedCertificate} from '@aws-cdk/aws-certificatemanager';
+import {Certificate, CertificateValidation, DnsValidatedCertificate,} from '@aws-cdk/aws-certificatemanager';
 import {ARecord, HostedZone, IHostedZone, RecordTarget} from '@aws-cdk/aws-route53';
 import {
     CloudFrontAllowedMethods,
@@ -19,25 +19,28 @@ export interface ICDKFullStackWebAppStackProps {
     websiteIndexDocument: string;
     websiteErrorDocument?: string;
     subdomain?: string // the subdomain portion of the url for ex [www, api, docs] etc
+    subdomainsList?: string[]; // the list of subdomains that you want to create
+    websiteSourceCodeLocationList?: string[]; // the locations of the source code for the website
 }
 
 export class CDKFullStackWebAppStack extends Stack {
     constructor(scope: App, id: string, props?: StackProps) {
         super(scope, id, props);
     }
+
     private CLOUDFRONT_REGION_FOR_CERTIFICATES = 'us-east-1'; // CloudFront only checks us-east-1 for certificates.
 
     // create the resources for the stack without a domain, certificate, hostedZone or CloudFront
     public initializeS3StaticWebsite(config: ICDKFullStackWebAppStackProps): Bucket {
-        // setup S3 and BucketDeployment
+        // setup S3 Bucket for Static Website Hosting and deploy the source code with the BucketDeployment
         const s3SourceBucket: Bucket = this.createBucket(config);
         s3SourceBucket.grantRead(new AnyPrincipal()); // allow public read access to the S3 bucket
-        this.createBucketDeployment(s3SourceBucket, config); // deploy the code to the S3 bucket
+        this.createBucketDeployment(s3SourceBucket, config.websiteSourceCodeLocation); // deploy the code to the S3 bucket
 
         return s3SourceBucket;
     }
 
-    // create the resources for the stack with CloudFront
+    // create the resources for the stack with CloudFront, your website will have https and a random cloudfront domain
     public initializeCloudFrontWebsite(config: ICDKFullStackWebAppStackProps): void {
         // Set up the s3SourceBucket and the s3RedirectBucket, deploy the code to the s3SourceBucket
         const s3SourceBucket: Bucket = this.createBucket(config);
@@ -46,7 +49,7 @@ export class CDKFullStackWebAppStack extends Stack {
         const originAccessIdentity: OriginAccessIdentity = this.createOriginAccessIdentity();
         this.createS3ToOAIBucketPolicy(s3SourceBucket, originAccessIdentity); // gives the OAI access to the S3 bucket
         const distribution: CloudFrontWebDistribution = this.createCloudFrontDistribution(s3SourceBucket, originAccessIdentity, config);
-        this.createBucketDeploymentWithCloudFront(s3SourceBucket, distribution, config);
+        this.createBucketDeployment(s3SourceBucket, config.websiteSourceCodeLocation, distribution);
     }
 
     // create the resources for the stack with CloudFront using a Custom Domain Name
@@ -55,15 +58,15 @@ export class CDKFullStackWebAppStack extends Stack {
         const s3SourceBucket: Bucket = this.createBucket(config);
 
         // setup Route53 and Amazon Certificate Manager
-        const hostedZone: IHostedZone = this.getHostedZone(config);
-        const certificate: Certificate = this.createCertificate(hostedZone, config);
+        const hostedZone: IHostedZone = this.getHostedZone(config.domainName);
+        const certificate: Certificate = this.createCertificate(hostedZone, config.domainName);
         const viewerCertificate: ViewerCertificate = this.createViewerCertificate(certificate, config);
 
         // setup CloudFront with the custom domain name
         const originAccessIdentity: OriginAccessIdentity = this.createOriginAccessIdentity();
         this.createS3ToOAIBucketPolicy(s3SourceBucket, originAccessIdentity); // attach S3 To OAI policy to S3 bucket
-        const distribution: CloudFrontWebDistribution = this.createCloudFrontDistributionWithCustomDomainName(s3SourceBucket, originAccessIdentity, viewerCertificate, config);
-        this.createBucketDeploymentWithCloudFront(s3SourceBucket, distribution, config)
+        const distribution: CloudFrontWebDistribution = this.createCloudFrontDistribution(s3SourceBucket, originAccessIdentity, config, viewerCertificate);
+        this.createBucketDeployment(s3SourceBucket, config.websiteSourceCodeLocation, distribution)
 
         // setup Route53 Alias Record to point to the domain name to the CloudFront distribution
         this.createAliasRecord(hostedZone, distribution, config);
@@ -80,43 +83,34 @@ export class CDKFullStackWebAppStack extends Stack {
         });
     }
 
-    // deploys the code to the S3 bucket, doesn't use CloudFront
-    private createBucketDeployment(s3SourceBucket: Bucket, config: ICDKFullStackWebAppStackProps): BucketDeployment {
-        return new BucketDeployment(this, 'S3BucketDeployment', {
-            sources: [Source.asset(config.websiteSourceCodeLocation)],
-            destinationBucket: s3SourceBucket,
-        });
-    }
-
     // deploys the code to the S3 bucket, uses CloudFront distribution and each deployment will validate the cache
-    private createBucketDeploymentWithCloudFront(s3SourceBucket: Bucket, distribution: CloudFrontWebDistribution, config: ICDKFullStackWebAppStackProps): BucketDeployment {
+    private createBucketDeployment(s3SourceBucket: Bucket, sourceCodeLocation: string, distribution?: CloudFrontWebDistribution): BucketDeployment {
         return new BucketDeployment(this, 'S3BucketDeployment', {
-            sources: [Source.asset(config.websiteSourceCodeLocation)],
+            sources: [Source.asset(sourceCodeLocation)],
             destinationBucket: s3SourceBucket,
-            distribution: distribution,
-            // Invalidate the cache for everything when we deploy so that cloudfront serves the latest site
-            distributionPaths: ['/*'],
+            distribution: distribution ? distribution : undefined,
+            distributionPaths: distribution ? ['/*'] : undefined, // Invalidate cache for all files so that cloudfront serves the latest site
         });
     }
 
     // find the current Route53 Hosted Zone for the domain
-    private getHostedZone(config: ICDKFullStackWebAppStackProps): IHostedZone {
+    private getHostedZone(domainName: string): IHostedZone {
         /* Have to use the existing registered domain that you own
          * Do not create a new one because it won't have the same NS DNS servers as the one you registered
          * This will cause the certificate validation to fail, and you won't be able to use https or the customer domain
         */
         return HostedZone.fromLookup(this, 'HostedZone', {
-            domainName: config.domainName,
+            domainName: domainName,
         })
     }
 
     // create the ACM certificate for the domain
-    private createCertificate(hostedZone: IHostedZone, config: ICDKFullStackWebAppStackProps): Certificate {
+    private createCertificate(hostedZone: IHostedZone, domainName: string): Certificate {
         return new DnsValidatedCertificate(this, 'Certificate', {
             hostedZone: hostedZone,
             region: this.CLOUDFRONT_REGION_FOR_CERTIFICATES, // CloudFront only checks us-east-1 region for certificates.
-            domainName: config.domainName, // includes all subdomains names like, www.example.com and docs.example.com
-            subjectAlternativeNames: [`*.${config.domainName}`], // includes all subdomains names
+            domainName: domainName, // includes all subdomains names like, www.example.com and docs.example.com
+            subjectAlternativeNames: [`*.${domainName}`], // includes all subdomains names
             validation: CertificateValidation.fromDns(hostedZone),
             cleanupRoute53Records: true, // remove the Route53 records after the certificate is created
         });
@@ -154,8 +148,8 @@ export class CDKFullStackWebAppStack extends Stack {
         });
     }
 
-    // create the CloudFront distribution without a custom domain name
-    private createCloudFrontDistribution(s3SourceBucket: Bucket, originAccessIdentity: OriginAccessIdentity, config: ICDKFullStackWebAppStackProps): CloudFrontWebDistribution {
+    // create the CloudFront distribution
+    private createCloudFrontDistribution(s3SourceBucket: Bucket, originAccessIdentity: OriginAccessIdentity, config: ICDKFullStackWebAppStackProps, viewerCertificate?: ViewerCertificate): CloudFrontWebDistribution {
         return new CloudFrontWebDistribution(this, 'CloudFrontDistribution', {
             // originConfigs tells CloudFront where to get the files from and the behavior of the distribution
             originConfigs: [{
@@ -170,35 +164,19 @@ export class CDKFullStackWebAppStack extends Stack {
                     isDefaultBehavior: true,
                 }],
             }],
+            viewerCertificate: viewerCertificate ? viewerCertificate : undefined,
             defaultRootObject: config.websiteIndexDocument, // the default page to load
             errorConfigurations: [
-                {errorCode: 403, responseCode: 200, responsePagePath: `/${config.websiteErrorDocument? config.websiteErrorDocument : config.websiteIndexDocument}`}, // redirect 403 errors to index.html
-                {errorCode: 404, responseCode: 200, responsePagePath: `/${config.websiteErrorDocument? config.websiteErrorDocument : config.websiteIndexDocument}`}, // redirect 404 errors to index.html
-            ],
-        });
-    }
-
-    // create the CloudFront distribution with the custom domain name
-    private createCloudFrontDistributionWithCustomDomainName(s3SourceBucket: Bucket, originAccessIdentity: OriginAccessIdentity, viewerCertificate: ViewerCertificate, config: ICDKFullStackWebAppStackProps): CloudFrontWebDistribution {
-        return new CloudFrontWebDistribution(this, 'CloudFrontDistribution', {
-            // originConfigs tells CloudFront where to get the files from and the behavior of the distribution
-            originConfigs: [{
-                s3OriginSource: {
-                    s3BucketSource: s3SourceBucket, // the S3 bucket
-                    originAccessIdentity: originAccessIdentity // this allows CloudFront to access the S3 bucket
-                },
-                behaviors: [{
-                    viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS, // redirect all HTTP requests to HTTPS
-                    allowedMethods: CloudFrontAllowedMethods.GET_HEAD, // only allow GET and HEAD requests
-                    compress: true, // compress files
-                    isDefaultBehavior: true,
-                }],
-            }],
-            viewerCertificate: viewerCertificate, // the certificate for the domain attached to the CloudFront distribution
-            defaultRootObject: config.websiteIndexDocument, // the default page to load
-            errorConfigurations: [
-                {errorCode: 403, responseCode: 200, responsePagePath: `/${config.websiteErrorDocument? config.websiteErrorDocument : config.websiteIndexDocument}`}, // redirect 403 errors to index.html
-                {errorCode: 404, responseCode: 200, responsePagePath: `/${config.websiteErrorDocument? config.websiteErrorDocument : config.websiteIndexDocument}`}, // redirect 404 errors to index.html
+                {
+                    errorCode: 403,
+                    responseCode: 200,
+                    responsePagePath: `/${config.websiteErrorDocument ? config.websiteErrorDocument : config.websiteIndexDocument}`
+                }, // redirect 403 errors to index.html
+                {
+                    errorCode: 404,
+                    responseCode: 200,
+                    responsePagePath: `/${config.websiteErrorDocument ? config.websiteErrorDocument : config.websiteIndexDocument}`
+                }, // redirect 404 errors to index.html
             ],
         });
     }
